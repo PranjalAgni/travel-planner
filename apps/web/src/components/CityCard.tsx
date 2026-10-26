@@ -107,7 +107,7 @@ function SpotRow({ spot, onChange, onRemove }: { spot: Spot; onChange: (s: Spot)
         <div className="truncate text-sm font-medium text-slate-900" title={spot.place.name}>
           {spot.place.name}
         </div>
-        <div className="mt-1 grid grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)] gap-1.5">
+        <div className="mt-1 grid grid-cols-[minmax(0,1fr)_6.75rem] gap-1.5">
           <select
             aria-label={`Category of ${spot.place.name}`}
             value={spot.category}

@@ -62,8 +62,20 @@ OpenStreetMap data.
    a day to zoom the map to it. If the spots do not fit in your dates, the extra days
    needed are added at the end, marked *Extra day*, with a warning.
 
-The trip is saved in your browser, so a refresh keeps it. If you edit the trip after
-planning, the plan is greyed out and marked stale until you re-plan.
+6. **Save trip** - give the trip a name (or keep the suggested one, e.g. *Lisbon & Porto,
+   Nov 2026*) and save it to **My trips**. From then on every change, including new
+   plans, saves automatically.
+7. **My trips** - the header button lists your saved trips. Open one to pick up where you
+   left off, with its plan and map, without planning again. You can also delete trips,
+   export one as a `.trip.json` file, or import files (for a backup, another browser, or a
+   friend). Imports never overwrite: a clashing name gets a suffix such as *(2)*.
+8. **Share** - the share button next to the trip name makes a link that contains the
+   whole trip. Whoever opens it sees the same trip and day-by-day plan straight away, with
+   no account and nothing uploaded, and can save their own copy.
+
+The trip you are working on survives a refresh even if you never save it. *New trip* and
+opening another trip ask first if that would throw away an unsaved trip. If you edit the
+trip after planning, the plan is greyed out and marked stale until you re-plan.
 
 ## Architecture
 
@@ -71,8 +83,11 @@ planning, the plan is greyed out and marked stale until you re-plan.
 flowchart LR
     subgraph Browser
         UI["React UI<br/>(Planner, CityCard,<br/>Itinerary, TripMap)"]
-        LS[("localStorage<br/>trip draft + last plan")]
+        LS[("localStorage<br/>open trip")]
+        IDB[("IndexedDB<br/>My trips library")]
         UI <--> LS
+        UI <--> IDB
+        UI -. "export / import" .-> FILE[".trip.json files"]
     end
 
     subgraph Web["apps/web - Next.js"]
@@ -134,10 +149,15 @@ apps/
     src/
       app/                  layout, page, global styles
       components/           Planner, TripSettings, CityCard, PlaceSearch,
-                            Itinerary, TripMap, CategoryIcon
+                            Itinerary, TripMap, CategoryIcon,
+                            TripBar, TripsMenu, Modal, DiscardGuard,
+                            ShareDialog, SharedLinkReceiver
       lib/api.ts            typed fetch client
-      lib/trip.ts           trip draft model, validation, request builder
-      lib/trip-store.ts     localStorage-backed store (useSyncExternalStore)
+      lib/trip.ts           trip draft model and schemas, validation, request builder
+      lib/trip-store.ts     the open trip: localStorage store (useSyncExternalStore)
+      lib/trip-library.ts   saved trips: IndexedDB store, cross-tab sync
+      lib/trip-file.ts      .trip.json export and import
+      lib/trip-share.ts     share links: encode a trip into the URL fragment and back
       lib/format.ts         date/time/distance formatting, day colours
     e2e/                    Playwright tests
 packages/
@@ -395,6 +415,8 @@ Response:
 ```mermaid
 flowchart TD
     Page["app/page.tsx<br/>header + Planner"] --> Planner
+    Page --> TripsMenu["TripsMenu<br/>My trips dialog"]
+    Planner --> TripBar["TripBar<br/>name, save, new trip"]
     Planner -->|"draft, onChange"| TripSettings
     Planner -->|"per city"| CityCard
     CityCard -->|"kind=city / kind=spot"| PlaceSearch
@@ -403,9 +425,13 @@ flowchart TD
     Itinerary --> DayCard
     Planner -->|"cities, plan, selectedDay<br/>(dynamic import, ssr: false)"| TripMap
     Planner <-->|"useTrip / updateTrip"| Store[("trip-store<br/>localStorage")]
+    TripsMenu <-->|"useLibrary"| Library[("trip-library<br/>IndexedDB")]
+    Store -->|"autosave when saved"| Library
+    TripBar -->|"Share"| ShareLib["trip-share<br/>#trip= link"]
+    ShareLib -->|"opened by SharedLinkReceiver"| Store
 ```
 
-- **State** - `lib/trip-store.ts` keeps `{ draft, plan }` in a module-level store that
+- **State** - `lib/trip-store.ts` keeps the open trip in a module-level store that
   writes through to localStorage, read with `useSyncExternalStore`. The server render
   gets `null` and shows a loading shell, and the browser fills in the saved trip during
   hydration. This avoids hydration mismatches and needs no state library.
@@ -421,6 +447,99 @@ flowchart TD
 - **Validation** - `draftProblems` gives friendly messages (missing city, empty city,
   bad dates) and disables the Plan button. The server validates again with the shared
   zod schema.
+
+### Saved trips
+
+Two stores with different jobs:
+
+| Store                      | Holds                                      | Why there                                                                 |
+| -------------------------- | ------------------------------------------ | ------------------------------------------------------------------------- |
+| `trip-store` (localStorage) | The open trip: `{ draft, plan, savedId, name }` | Synchronous, so the trip is ready on the first client render; one small record |
+| `trip-library` (IndexedDB) | Every saved trip with its last plan        | Asynchronous, much larger quota than localStorage, fine for many trips with plans |
+
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant B as TripBar / TripsMenu
+    participant S as trip-store
+    participant L as trip-library
+    participant DB as IndexedDB
+
+    U->>B: Save trip
+    B->>S: saveCurrentTrip()
+    S->>L: saveTrip({ id, name, draft, plan })
+    L->>DB: put (keeps createdAt, sets updatedAt)
+    L-->>L: refresh list, notify other tabs
+    S->>S: link the open trip (savedId)
+    U->>S: any later edit (updateTrip)
+    S->>L: saveTrip(...) autosave
+    U->>B: My trips, open a trip
+    B->>B: unsaved work? ask first (DiscardGuard)
+    B->>S: openTrip(saved) - draft and plan restored, no re-plan
+```
+
+- **Linking** - `savedId` ties the open trip to a library entry. While linked, every
+  `updateTrip` also writes to IndexedDB, so there is no separate "save changes" step.
+  Opening a trip or starting a new one replaces the open trip without writing anything.
+- **Validation** - everything read back (localStorage, IndexedDB rows, imported files) is
+  parsed with zod schemas (`TripDraftSchema`, `SavedPlanSchema`, `PlanResponseSchema`).
+  Bad rows are skipped, so one corrupt entry cannot break the app. The open-trip schema
+  has defaults, so trips stored before saved trips existed still load.
+- **Tabs** - a `BroadcastChannel` tells other open tabs to reload the list after a change.
+  If the same trip is edited in two tabs at once, the last write wins.
+- **Durability** - the first save calls `navigator.storage.persist()`, asking the browser
+  not to evict saved trips when disk space is low. If storage is blocked (some private
+  modes), saving is disabled with an explanation and the rest of the app still works.
+- **File format** - `{ format: "travel-planner-trip", version: 1, name, draft, plan }`.
+  The version field leaves room for migrations. Imports always get a new id.
+
+### Share links
+
+A share link carries the whole trip in the URL fragment:
+
+```
+https://host/#trip=1.<base64url(deflate-raw(JSON { name, draft, plan }))>
+```
+
+```mermaid
+sequenceDiagram
+    actor A as Sender
+    participant SD as ShareDialog
+    participant TS as trip-share
+    actor B as Recipient
+    participant R as SharedLinkReceiver
+    participant S as trip-store
+
+    A->>SD: Share trip
+    SD->>TS: createShareLink(trip)
+    TS->>TS: compact ids and coordinates, keep plan only if current
+    TS->>TS: JSON, CompressionStream deflate-raw, base64url
+    TS-->>SD: url
+    A->>B: sends the link (chat, mail...)
+    B->>R: opens the link (page load or hashchange)
+    R->>R: clear the hash from the address bar
+    R->>TS: readShareHash(hash)
+    TS->>TS: base64url, DecompressionStream, JSON, zod validate
+    TS-->>R: { name, draft, plan } with requestKey rebuilt
+    R->>R: unsaved work? ask first (DiscardGuard)
+    R->>S: openSharedTrip - unsaved, marked "Shared with you"
+```
+
+- **Nothing leaves the browser** - browsers never send the fragment (`#...`) to a
+  server, so neither our servers nor their logs ever see the trip. The link is the trip.
+- **Size** - random ids are replaced with short ones (`c1`, `s2`) and coordinates are
+  rounded to 5 decimals (about a metre) before compressing. A 2-city, 5-spot trip with
+  its plan is about 1 KB; 30 spots about 2.2 KB. Over 8,000 characters the dialog warns
+  that some apps cut long links and suggests exporting a file instead.
+- **Plan only if current** - the plan is included only when it matches the trip as it is
+  (`isPlanCurrent`), so a recipient never sees a stale plan. The recipient rebuilds the
+  `requestKey` from the decoded draft, so the plan shows as current without re-planning.
+- **Opening** - the receiver runs on load and on `hashchange` (a link pasted into an open
+  tab). It clears the hash first, so a refresh does not reopen the link over edits. The
+  shared trip opens unsaved; the usual unsaved-work prompt protects the recipient's own
+  trip. Broken or cut-off links show a clear message at the top of the sidebar.
+- **Versioned** - the `1.` prefix is the format version. Decoding validates with the same
+  zod schemas as storage, so a tampered link can only fail with a message.
 
 ## Configuration
 
@@ -441,6 +560,8 @@ Timeouts: 8 s for place search, 15 s for routing. Limits: 60 trip days, 150 spot
 | Providers        | Vitest     | `server/test/osrm.test.ts`   | OSRM chunking under 100 coordinates, unroutable pairs, fallback       |
 | HTTP API         | Supertest  | `server/test/app.test.ts`    | Validation, error codes, malformed JSON, happy path                   |
 | End to end       | Playwright | `web/e2e/trip.spec.ts`       | Full user flow on desktop and mobile against the real API and a production build |
+| End to end       | Playwright | `web/e2e/saved-trips.spec.ts` | Save, reopen with plan, autosave, delete, unsaved-work prompt, export and import |
+| End to end       | Playwright | `web/e2e/share.spec.ts`      | Share link opens the same plan in a fresh browser, stale plans left out, cut-off links, unsaved-work prompt |
 
 The planner tests use a flat-world matrix (1 km = 1 minute) from `test/fixtures.ts`, so
 expected times can be worked out by hand. The E2E tests stub place search in the browser
@@ -466,11 +587,19 @@ flaky.
 | 13 | **Category-based default durations, editable** | Gives a sensible plan with zero effort, using OSM types to guess the category. | Defaults are rough averages. |
 | 14 | **Shared zod schemas in `packages/shared`** | One source of truth for the contract; the server validates with it and both sides share the inferred types. | Both apps depend on the shared package (bundled via tsup and Next.js). |
 | 15 | **Next.js only for UI; Express for the API** | Keeps the backend a plain, independently runnable Node + TypeScript service as requested; Next rewrites `/api` so there is no CORS. | Two processes in development (`npm run dev` runs both). |
-| 16 | **No database; trip in localStorage** | A personal planner does not need accounts. Refresh-safe with zero infrastructure. | Trips do not sync across devices or browsers. |
+| 16 | **No database; trips stay in the browser** | A personal planner does not need accounts. Refresh-safe with zero infrastructure. | Trips do not sync across devices or browsers (export/import covers moving them). |
 | 17 | **`useSyncExternalStore` store instead of a state library** | Tiny, hydration-safe, no dependencies. | Hand-written store (about 50 lines). |
 | 18 | **Photon searches in English and re-ranks results** | Without `lang=en` "Lisbon" only matches towns in the US; cities prefer settlements over admin areas, spots prefer POIs over building footprints so categories are right. | English-only names in results. |
 | 19 | **In-memory search cache (24 h)** | Debounced typing repeats queries; caching keeps the UI fast and is polite to the free Photon service. | Cache resets on restart; not shared across instances. |
 | 20 | **Deterministic E2E tests** | Public map services are slow and change over time; stubbing them keeps the suite fast and not flaky while still exercising the real API and UI. | Live Photon/OSRM integration is checked manually, not in CI. |
+| 21 | **Saved trips in IndexedDB, not the File System Access API** | IndexedDB works in every browser, is fast and asynchronous, and has room for many trips with plans. The File System Access API only exists in Chromium browsers and needs a file picker for every save, which does not fit a "My trips" list. | Trips live inside the browser profile; clearing site data removes them (export guards against that). |
+| 22 | **Export / import as plain `.trip.json` files** | Works in every browser with a normal download and file input, gives backups and sharing, and the files are readable and versioned. | Manual: there is no automatic sync. |
+| 23 | **Autosave once a trip is saved** | Nothing to forget and no "unsaved changes" state for saved trips; matches how documents work in modern apps. | Experimenting changes the saved trip; save a copy by exporting and importing it. |
+| 24 | **Open trip in localStorage, library in IndexedDB** | The open trip must be readable synchronously for a flicker-free first render; the library can load asynchronously and needs the larger quota. | Two stores to keep in step (only through `trip-store`). |
+| 25 | **Schema-validate everything read from storage or files** | Stored data outlives code versions and files can come from anywhere; validation turns bad data into a skipped row or a clear message instead of a crash. | Response schemas now live in `packages/shared` next to the types they define. |
+| 26 | **Share links carry the trip in the URL fragment** instead of storing it on a server | No backend, no database, no expiry, and private by construction: the fragment is never sent to any server. Works offline and in every modern browser. | Links grow with the trip (about 1 KB for a small trip), a link is a snapshot that does not update, and anyone holding it can read the trip. |
+| 27 | **deflate-raw via `CompressionStream` and base64url** | Built into browsers, so no compression library; JSON of a trip compresses well. base64url needs no escaping in URLs. | Asynchronous API; browsers older than 2023 cannot create or open links. |
+| 28 | **Plan included only if current; ids compacted** | The recipient sees exactly what the sender sees, never a stale plan. Short ids and rounded coordinates cut the link size substantially. | A stale trip is shared without its plan, so the recipient plans it themselves. |
 
 ## Limitations and next steps
 
@@ -484,5 +613,9 @@ flaky.
 - **Travel modes** - driving only. Walking is available from OSRM foot profiles; public
   transport needs a provider like Google or Transitous.
 - **Flights** - long intercity hops are treated as drives (or estimates across seas).
+- **Live sharing** - a share link is a snapshot; later edits are not seen by the
+  recipient. Next: collaborative trips would need a sync backend.
+- **Trip sync** - saved trips stay in one browser. Next: optional accounts or a sync
+  backend so trips follow you across devices, and "Duplicate" to branch a trip.
 - **Must-do vs nice-to-have** - when spots do not fit, all are still scheduled on extra
   days. Priorities would let the planner drop the least important ones instead.

@@ -108,58 +108,65 @@ export const PlanRequestSchema = z
   });
 export type PlanRequest = z.infer<typeof PlanRequestSchema>;
 
-export type VisitItem = {
-  kind: "visit";
-  spotId: string;
-  cityId: string;
-  name: string;
-  category: Category;
+export const VisitItemSchema = z.object({
+  kind: z.literal("visit"),
+  spotId: z.string(),
+  cityId: z.string(),
+  name: z.string(),
+  category: CategorySchema,
   /** Minutes since midnight of the day. May exceed 24h when a day overruns. */
-  start: number;
-  end: number;
-};
+  start: z.number(),
+  end: z.number(),
+});
+export type VisitItem = z.infer<typeof VisitItemSchema>;
 
-export type TravelItem = {
-  kind: "travel";
-  fromName: string;
-  toName: string;
+export const TravelItemSchema = z.object({
+  kind: z.literal("travel"),
+  fromName: z.string(),
+  toName: z.string(),
   /** True when moving between cities. */
-  intercity: boolean;
-  start: number;
-  end: number;
-  distanceKm: number;
-};
+  intercity: z.boolean(),
+  start: z.number(),
+  end: z.number(),
+  distanceKm: z.number(),
+});
+export type TravelItem = z.infer<typeof TravelItemSchema>;
 
-export type TimelineItem = VisitItem | TravelItem;
+export const TimelineItemSchema = z.discriminatedUnion("kind", [VisitItemSchema, TravelItemSchema]);
+export type TimelineItem = z.infer<typeof TimelineItemSchema>;
 
-export type DayPlan = {
+export const DayPlanSchema = z.object({
   /** YYYY-MM-DD */
-  date: string;
+  date: z.string().regex(DATE_RE),
   /** City ids touched on this day, in order. */
-  cityIds: string[];
-  items: TimelineItem[];
+  cityIds: z.array(z.string()),
+  items: z.array(TimelineItemSchema),
   /** Day falls after the requested end date. */
-  overBudget: boolean;
+  overBudget: z.boolean(),
   /** Planned activity runs past the requested day end. */
-  overrun: boolean;
-};
+  overrun: z.boolean(),
+});
+export type DayPlan = z.infer<typeof DayPlanSchema>;
 
-export type RoutingSource = "osrm" | "estimate";
+export const RoutingSourceSchema = z.enum(["osrm", "estimate"]);
+export type RoutingSource = z.infer<typeof RoutingSourceSchema>;
 
-export type PlanResponse = {
-  days: DayPlan[];
-  cityOrder: string[];
-  summary: {
-    daysAvailable: number;
-    daysNeeded: number;
-    fits: boolean;
-    visitMinutes: number;
-    travelMinutes: number;
-    travelKm: number;
-  };
-  warnings: string[];
-  routing: RoutingSource;
-};
+/** Validates plans that come back from storage or an imported file. */
+export const PlanResponseSchema = z.object({
+  days: z.array(DayPlanSchema),
+  cityOrder: z.array(z.string()),
+  summary: z.object({
+    daysAvailable: z.number(),
+    daysNeeded: z.number(),
+    fits: z.boolean(),
+    visitMinutes: z.number(),
+    travelMinutes: z.number(),
+    travelKm: z.number(),
+  }),
+  warnings: z.array(z.string()),
+  routing: RoutingSourceSchema,
+});
+export type PlanResponse = z.infer<typeof PlanResponseSchema>;
 
 export type PlaceSearchResponse = { results: Place[] };
 

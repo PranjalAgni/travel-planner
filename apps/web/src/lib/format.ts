@@ -8,6 +8,36 @@ export function formatDate(isoDate: string): string {
   return dateFormat.format(new Date(`${isoDate}T12:00:00`));
 }
 
+const rangeFormat = new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", year: "numeric" });
+
+/** "1 - 4 Nov 2026" style range, collapsing shared month and year. */
+export function formatDateRange(startDate: string, endDate: string): string {
+  const start = new Date(`${startDate}T12:00:00`);
+  const end = new Date(`${endDate}T12:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return "No dates";
+  return rangeFormat.formatRange(start, end);
+}
+
+const relativeFormat = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+const RELATIVE_STEPS: [Intl.RelativeTimeFormatUnit, number][] = [
+  ["second", 60],
+  ["minute", 60],
+  ["hour", 24],
+  ["day", 30],
+  ["month", 12],
+  ["year", Infinity],
+];
+
+/** "5 minutes ago", "yesterday", ... */
+export function formatRelative(timestamp: number, now = Date.now()): string {
+  let value = (timestamp - now) / 1000;
+  for (const [unit, size] of RELATIVE_STEPS) {
+    if (Math.abs(value) < size) return unit === "second" ? "just now" : relativeFormat.format(Math.round(value), unit);
+    value /= size;
+  }
+  return "";
+}
+
 export function formatDistance(km: number): string {
   return km < 10 ? `${km.toFixed(1)} km` : `${Math.round(km)} km`;
 }

@@ -1,16 +1,37 @@
-import { addDays, type CityOrder, type Pace, type Place, type PlanRequest, type Spot } from "@travel/shared";
+import { z } from "zod";
+import {
+  CityOrderSchema,
+  PaceSchema,
+  PlaceSchema,
+  PlanResponseSchema,
+  SpotSchema,
+  addDays,
+  type PlanRequest,
+} from "@travel/shared";
 
-export type DraftCity = { id: string; place: Place | null; spots: Spot[] };
+/** A city being edited; unlike a planned city it may not have a place or spots yet. */
+export const DraftCitySchema = z.object({
+  id: z.string().min(1),
+  place: PlaceSchema.nullable(),
+  spots: z.array(SpotSchema),
+});
+export type DraftCity = z.infer<typeof DraftCitySchema>;
 
-export type TripDraft = {
-  startDate: string;
-  endDate: string;
-  dayStart: string;
-  dayEnd: string;
-  pace: Pace;
-  cityOrder: CityOrder;
-  cities: DraftCity[];
-};
+/** The trip as the user is editing it. Fields may be incomplete or invalid until planning. */
+export const TripDraftSchema = z.object({
+  startDate: z.string(),
+  endDate: z.string(),
+  dayStart: z.string(),
+  dayEnd: z.string(),
+  pace: PaceSchema,
+  cityOrder: CityOrderSchema,
+  cities: z.array(DraftCitySchema).min(1),
+});
+export type TripDraft = z.infer<typeof TripDraftSchema>;
+
+/** A plan together with the exact request that produced it, so we can tell when it is stale. */
+export const SavedPlanSchema = z.object({ requestKey: z.string(), response: PlanResponseSchema });
+export type SavedPlan = z.infer<typeof SavedPlanSchema>;
 
 export function newId(): string {
   return crypto.randomUUID();
@@ -62,4 +83,34 @@ export function toPlanRequest(draft: TripDraft): PlanRequest {
     cityOrder: draft.cityOrder,
     cities: draft.cities.map((c) => ({ id: c.id, place: c.place!, spots: c.spots })),
   };
+}
+
+/** True when the draft holds nothing worth keeping. */
+export function isBlankDraft(draft: TripDraft): boolean {
+  return draft.cities.every((c) => !c.place && c.spots.length === 0);
+}
+
+const monthFormat = new Intl.DateTimeFormat("en", { month: "short", year: "numeric" });
+
+/** A readable default name such as "Lisbon & Porto, Nov 2026". */
+export function suggestTripName(draft: TripDraft): string {
+  const names = draft.cities.flatMap((c) => (c.place ? [c.place.name] : []));
+  if (names.length === 0) return "Untitled trip";
+  const where =
+    names.length <= 2
+        ? names.join(" & ")
+        : `${names.slice(0, 2).join(", ")} +${names.length - 2}`;
+  const when = /^\d{4}-\d{2}-\d{2}$/.test(draft.startDate)
+    ? `, ${monthFormat.format(new Date(`${draft.startDate}T12:00:00`))}`
+    : "";
+  return where + when;
+}
+
+/** Appends " (2)", " (3)", ... so a name does not clash with existing ones. */
+export function uniqueName(name: string, taken: Iterable<string>): string {
+  const names = new Set(taken);
+  if (!names.has(name)) return name;
+  let n = 2;
+  while (names.has(`${name} (${n})`)) n++;
+  return `${name} (${n})`;
 }

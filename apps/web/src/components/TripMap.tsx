@@ -17,12 +17,14 @@ type Props = {
 type Pin = { key: string; lat: number; lon: number; title: string; label: string; color: string; dim: boolean };
 
 const UNPLANNED_COLOR = "#64748b";
+const WORLD_CENTER: [number, number] = [20, 0];
+const WORLD_ZOOM = 2;
 
 export default function TripMap({ cities, plan, selectedDay }: Props) {
   const { pins, lines, focus } = useMemo(() => layout(cities, plan, selectedDay), [cities, plan, selectedDay]);
 
   return (
-    <MapContainer center={[20, 0]} zoom={2} scrollWheelZoom className="size-full" attributionControl>
+    <MapContainer center={WORLD_CENTER} zoom={WORLD_ZOOM} scrollWheelZoom className="size-full" attributionControl>
       <TileLayer
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -134,7 +136,11 @@ function FitBounds({ points }: { points: { lat: number; lon: number }[] }) {
   const signature = points.map((p) => `${p.lat.toFixed(5)},${p.lon.toFixed(5)}`).join(";");
 
   useEffect(() => {
-    if (!signature) return;
+    if (!signature) {
+      // Nothing to show (e.g. a new trip): zoom back out instead of staying on the old one.
+      map.flyTo(WORLD_CENTER, WORLD_ZOOM, { duration: 0.6 });
+      return;
+    }
     const latLngs = signature.split(";").map((s) => s.split(",").map(Number) as [number, number]);
     if (latLngs.length === 1) map.flyTo(latLngs[0]!, 14, { duration: 0.6 });
     else map.flyToBounds(L.latLngBounds(latLngs), { padding: [40, 40], maxZoom: 15, duration: 0.6 });

@@ -4,9 +4,11 @@ import dynamic from "next/dynamic";
 import { useMemo, useState } from "react";
 import { ApiRequestError, planTrip } from "@/lib/api";
 import { draftProblems, newCity, toPlanRequest, type DraftCity, type TripDraft } from "@/lib/trip";
-import { resetTrip, updateTrip, useTrip } from "@/lib/trip-store";
+import { updateTrip, useTrip } from "@/lib/trip-store";
 import { CityCard } from "./CityCard";
 import { Itinerary } from "./Itinerary";
+import { useSharedLinkReceiver } from "./SharedLinkReceiver";
+import { TripBar } from "./TripBar";
 import { TripSettings } from "./TripSettings";
 
 // Leaflet touches `window` on import, so the map only renders in the browser.
@@ -21,7 +23,9 @@ export function Planner() {
   const trip = useTrip();
   const [planning, setPlanning] = useState(false);
   const [error, setError] = useState<PlanError | null>(null);
-  const [selectedDay, setSelectedDay] = useState<number | null>(null);
+  const shareLink = useSharedLinkReceiver();
+  // Remembered per plan object, so opening another trip or re-planning clears the selection.
+  const [selection, setSelection] = useState<{ plan: unknown; day: number } | null>(null);
 
   const draft = trip?.draft;
   const requestKey = useMemo(() => (draft ? JSON.stringify(toPlanRequest(draft)) : ""), [draft]);
@@ -33,6 +37,8 @@ export function Planner() {
   if (!trip || !draft) return <LoadingShell />;
 
   const plan = trip.plan;
+  const selectedDay = selection && selection.plan === plan ? selection.day : null;
+  const setSelectedDay = (day: number | null) => setSelection(day === null ? null : { plan, day });
   const stale = plan !== null && plan.requestKey !== requestKey;
   const problems = draftProblems(draft);
 
@@ -48,7 +54,6 @@ export function Planner() {
       const request = toPlanRequest(draft);
       const response = await planTrip(request);
       updateTrip((s) => ({ ...s, plan: { requestKey: JSON.stringify(request), response } }));
-      setSelectedDay(null);
     } catch (err) {
       setError(
         err instanceof ApiRequestError
@@ -64,14 +69,18 @@ export function Planner() {
     <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
       <aside className="flex w-full shrink-0 flex-col border-slate-200 bg-slate-50 lg:w-[440px] lg:border-r">
         <div className="flex-1 space-y-4 overflow-y-auto p-4 lg:p-5">
+          {shareLink.error && (
+            <div role="alert" className="flex items-start gap-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-900">
+              <p className="flex-1">{shareLink.error}</p>
+              <button type="button" onClick={shareLink.dismissError} className="shrink-0 text-xs font-medium text-rose-700 hover:text-rose-900">
+                Dismiss
+              </button>
+            </div>
+          )}
+          <TripBar trip={trip} />
           <TripSettings draft={draft} onChange={setDraft} />
 
-          <div className="flex items-center justify-between pt-1">
-            <h2 className="text-sm font-semibold text-slate-900">Cities &amp; spots</h2>
-            <button type="button" onClick={resetTrip} className="text-xs text-slate-500 hover:text-slate-800">
-              Start over
-            </button>
-          </div>
+          <h2 className="pt-1 text-sm font-semibold text-slate-900">Cities &amp; spots</h2>
 
           {draft.cities.map((city, i) => (
             <CityCard
@@ -157,6 +166,7 @@ export function Planner() {
           </div>
         </div>
       </main>
+      {shareLink.dialog}
     </div>
   );
 }

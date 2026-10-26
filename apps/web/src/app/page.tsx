@@ -1,4 +1,5 @@
 import { Planner } from "@/components/Planner";
+import { TripsMenu } from "@/components/TripsMenu";
 
 export default function Home() {
   return (
@@ -9,6 +10,7 @@ export default function Home() {
         </span>
         <h1 className="text-base font-semibold tracking-tight text-slate-900">Trip Planner</h1>
         <span className="ml-1 hidden text-sm text-slate-500 sm:inline">Fit every spot into your dates, the quick way.</span>
+        <TripsMenu />
       </header>
       <Planner />
     </>

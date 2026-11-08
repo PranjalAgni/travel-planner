@@ -9,6 +9,8 @@ This README is the handbook for the project: how to run it, how it is put togeth
 a request flows through the code, how the planning algorithm works, and why things are
 built the way they are.
 
+happy Diwali 🪔 2026
+
 ## Contents
 
 - [Quick start](#quick-start)

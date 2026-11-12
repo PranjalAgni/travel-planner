@@ -1,5 +1,7 @@
 # Trip Planner
 
+
+very nice resource https://firstprinciplesapproach.dev/learn/databases/
 Give it your travel dates, the cities you are visiting and the spots you want to see in
 each one (cafes, parks, adventure parks, restaurants, museums...). It works out the
 quickest order to visit them and splits everything into a day-by-day itinerary with
